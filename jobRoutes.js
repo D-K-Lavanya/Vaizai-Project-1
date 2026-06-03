@@ -1,10 +1,11 @@
 import express from 'express';
 import Job from '../models/Job.js';
+import roleCheck from '../../api-gateway/src/middlewares/roleCheck.mjs';
 
 const router = express.Router();
 
-// POST a new job
-router.post('/', async (req, res) => {
+// POST a new job - ONLY accessible by recruiters
+router.post('/', roleCheck(['recruiter']), async (req, res) => {
   try {
     const { title, company, description, requirements, location } = req.body;
     const newJob = new Job({

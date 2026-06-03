@@ -4,6 +4,9 @@ import Job from '../models/Job.js';
 import upload from '../middleware/upload.js';
 import { calculateMatchScore } from '../utils/rankEngine.js';
 import { sendStatusUpdate } from '../utils/emailService.js';
+import roleCheck from '../../api-gateway/src/middlewares/roleCheck.mjs';
+import { extractTextFromPDF } from '../controllers/parserController.js';
+import aiClientService from '../services/aiClientService.js';
 
 const router = express.Router();
 
@@ -11,7 +14,7 @@ const router = express.Router();
  * @route PATCH /api/candidates/:id/status
  * @desc Update candidate status and send email notification
  */
-router.patch('/:id/status', async (req, res) => {
+router.patch('/:id/status', roleCheck(['recruiter']), async (req, res) => {
   try {
     const { status } = req.body;
     const candidate = await Candidate.findByIdAndUpdate(
@@ -37,7 +40,7 @@ router.patch('/:id/status', async (req, res) => {
  * @route GET /api/candidates/job/:jobId/analytics
  * @desc Get sorted matching score analytics for a specific job
  */
-router.get('/job/:jobId/analytics', async (req, res) => {
+router.get('/job/:jobId/analytics', roleCheck(['recruiter']), async (req, res) => {
   try {
     const { jobId } = req.params;
     
@@ -52,12 +55,13 @@ router.get('/job/:jobId/analytics', async (req, res) => {
     const candidates = await Candidate.find();
 
     const rankedCandidates = candidates.map(candidate => {
-      const matchScore = calculateMatchScore(candidate.resumeText || '', targetKeywords);
+      const matchData = calculateMatchScore(candidate, targetKeywords);
       return {
         _id: candidate._id,
         name: candidate.name,
         email: candidate.email,
-        matchScore: matchScore,
+        matchScore: matchData.score,
+        matchedSkills: matchData.matchedSkills,
         status: candidate.status,
         appliedDate: candidate.createdAt
       };
@@ -88,7 +92,7 @@ router.get('/job/:jobId/analytics', async (req, res) => {
  * @route GET /api/candidates/job/:jobId/rankings
  * @desc Get ranked candidates for a specific job based on match score
  */
-router.get('/job/:jobId/rankings', async (req, res) => {
+router.get('/job/:jobId/rankings', roleCheck(['recruiter']), async (req, res) => {
   try {
     const { jobId } = req.params;
     
@@ -138,23 +142,51 @@ router.post('/', upload.single('resume'), async (req, res) => {
       }
     }
 
-    const newCandidate = new Candidate({
-      name,
-      email,
-      phone,
-      skills: parsedSkills || [],
+    let resumeText = '';
+    let aiParsedData = null;
+
+    if (req.file) {
+      // 1. Get raw text for keyword matching/ranking engine
+      try {
+        resumeText = await extractTextFromPDF(req.file.path);
+      } catch (parseError) {
+        console.warn('Local PDF extraction failed:', parseError.message);
+        resumeText = 'Fallback: Text extraction failed.';
+      }
+
+      // 2. Call Python AI Worker for advanced NLP parsing
+      aiParsedData = await aiClientService.parseResume(req.file.path);
+    }
+
+    // Use AI data if available, otherwise fall back to form data
+    const finalCandidateData = {
+      name: (aiParsedData && !aiParsedData.fallback) ? aiParsedData.name : name,
+      email: (aiParsedData && !aiParsedData.fallback) ? aiParsedData.email : email,
+      phone: (aiParsedData && !aiParsedData.fallback) ? aiParsedData.phone : phone,
+      skills: (aiParsedData && !aiParsedData.fallback) ? aiParsedData.skills : (parsedSkills || []),
       resumeUrl: req.file ? req.file.path : null,
+      resumeText: resumeText
+    };
+
+    const newCandidate = new Candidate({
+      ...finalCandidateData,
+      status: 'Applied'
     });
 
     const savedCandidate = await newCandidate.save();
-    res.status(201).json(savedCandidate);
+    res.status(201).json({
+      message: 'Profile submitted successfully',
+      candidateId: savedCandidate._id,
+      aiProcessed: aiParsedData && !aiParsedData.fallback
+    });
   } catch (error) {
+    console.error('Candidate creation error:', error);
     res.status(400).json({ message: error.message });
   }
 });
 
 // GET all candidates
-router.get('/', async (req, res) => {
+router.get('/', roleCheck(['recruiter']), async (req, res) => {
   try {
     const candidates = await Candidate.find();
     res.json(candidates);

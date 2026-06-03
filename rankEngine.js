@@ -1,62 +1,56 @@
 /**
  * Intelligent Ranking Engine for Candidate Resumes
- * Provides scoring algorithms based on keyword matching and text analysis
  */
 
 /**
- * Calculates a match score between a resume text and a set of required skills/keywords
- * @param {string} resumeText - Raw text extracted from the candidate's resume
- * @param {Array<string>} targetKeywords - List of skills or keywords to match against
- * @returns {number} - A score from 0 to 100
+ * Calculates a match score between candidate data and job requirements
+ * @param {Object} candidate - Candidate object containing resumeText and skills array
+ * @param {Array<string>} targetKeywords - List of skills/keywords from the job posting
+ * @returns {Object} - An object containing the score and the match reasoning
  */
-export const calculateMatchScore = (resumeText, targetKeywords) => {
-  if (!resumeText || !targetKeywords || targetKeywords.length === 0) {
-    return 0;
+export const calculateMatchScore = (candidate, targetKeywords) => {
+  const { resumeText, skills: candidateSkills } = candidate;
+  
+  if (!targetKeywords || targetKeywords.length === 0) {
+    return { score: 0, reason: "No job requirements provided" };
   }
 
-  const normalizedText = resumeText.toLowerCase();
-  let matches = 0;
+  const normalizedTarget = targetKeywords.map(k => k.toLowerCase().trim());
+  let matches = new Set();
 
-  targetKeywords.forEach(keyword => {
-    const normalizedKeyword = keyword.toLowerCase().trim();
-    if (normalizedKeyword && normalizedText.includes(normalizedKeyword)) {
-      matches++;
-      
-      // Bonus for multiple occurrences (simplified)
-      const occurrences = (normalizedText.match(new RegExp(normalizedKeyword, 'g')) || []).length;
-      if (occurrences > 2) {
-        matches += 0.5; // Small bonus for high relevance
+  // 1. Check structured skills (High confidence)
+  if (candidateSkills && Array.isArray(candidateSkills)) {
+    candidateSkills.forEach(skill => {
+      const normalizedSkill = skill.toLowerCase().trim();
+      if (normalizedTarget.includes(normalizedSkill)) {
+        matches.add(normalizedSkill);
       }
-    }
-  });
+    });
+  }
 
-  // Calculate percentage based on target keywords
-  const rawScore = (matches / targetKeywords.length) * 100;
-  
-  // Cap at 100
-  return Math.min(Math.round(rawScore), 100);
-};
+  // 2. Fallback to raw text matching (Lower confidence)
+  if (resumeText) {
+    const normalizedText = resumeText.toLowerCase();
+    normalizedTarget.forEach(keyword => {
+      if (normalizedText.includes(keyword)) {
+        matches.add(keyword);
+      }
+    });
+  }
 
-/**
- * Compares two sets of skills (arrays) and returns an overlap coefficient
- * @param {Array<string>} candidateSkills 
- * @param {Array<string>} requiredSkills 
- * @returns {number} - Overlap score (0 to 1)
- */
-export const calculateSkillOverlap = (candidateSkills, requiredSkills) => {
-  if (!candidateSkills.length || !requiredSkills.length) return 0;
-  
-  const setA = new Set(candidateSkills.map(s => s.toLowerCase().trim()));
-  const setB = new Set(requiredSkills.map(s => s.toLowerCase().trim()));
-  
-  const intersection = new Set([...setA].filter(x => setB.has(x)));
-  
-  return intersection.size / Math.min(setA.size, setB.size);
+  const matchCount = matches.size;
+  const rawScore = (matchCount / normalizedTarget.length) * 100;
+  const finalScore = Math.min(Math.round(rawScore), 100);
+
+  return {
+    score: finalScore,
+    matchedSkills: Array.from(matches),
+    reason: `Matched ${matchCount} out of ${normalizedTarget.length} key requirements.`
+  };
 };
 
 const rankEngine = {
-  calculateMatchScore,
-  calculateSkillOverlap
+  calculateMatchScore
 };
 
 export default rankEngine;
